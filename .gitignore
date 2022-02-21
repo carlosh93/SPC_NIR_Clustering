@@ -1,4 +1,6 @@
 # Custom
+.idea/
+.idea/deployment.xml
 pretrained_weights_original/
 data/
 

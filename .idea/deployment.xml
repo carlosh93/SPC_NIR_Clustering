@@ -1,16 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="stanford_cluster" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="Stanford_Cluster" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
-      <paths name="stanford_cluster">
+      <paths name="Stanford_Cluster">
         <serverdata>
           <mappings>
             <mapping deploy="/sailhome/carloshm/projects/SPC_Design" local="$PROJECT_DIR$" web="/" />
           </mappings>
           <excludedPaths>
             <excludedPath path="/sailhome/carloshm/projects/SPC_Design/venv" />
-            <excludedPath local="true" path="$PROJECT_DIR$/local_venv" />
-            <excludedPath path="/sailhome/carloshm/projects/SPC_Design/data" />
           </excludedPaths>
         </serverdata>
       </paths>

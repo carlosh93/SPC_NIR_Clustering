@@ -10,6 +10,7 @@ import numpy as np
 from post_clustering import spectral_clustering, acc, nmi
 import scipy.io as sio
 import math
+import matplotlib.pyplot as plt
 
 
 class Conv2dSamePad(nn.Module):
@@ -159,15 +160,15 @@ class DSCNet(nn.Module):
 
 
 def train(model,  # type: DSCNet
-          x, y, epochs, lr=1e-3, weight_coef=1.0, weight_selfExp=150, device='cuda',
-          alpha=0.04, dim_subspace=12, ro=8, show=10):
+          x, y, epochs, lr=5e-4, weight_coef=1.0, weight_selfExp=150, device='cuda',
+          alpha=0.04, dim_subspace=12, ro=8, show=50):
     optimizer = optim.Adam(model.parameters(), lr=lr)
     if not isinstance(x, torch.Tensor):
         x = torch.tensor(x, dtype=torch.float32, device=device)
     x = x.to(device)
     if isinstance(y, torch.Tensor):
         y = y.to('cpu').numpy()
-    K = len(np.unique(y))
+    K = 4  # len(np.unique(y))
     for epoch in range(epochs):
         x_recon, z, z_recon = model(x)
         loss = model.loss_fn(x, x_recon, z, z_recon, weight_coef=weight_coef, weight_selfExp=weight_selfExp)
@@ -177,8 +178,12 @@ def train(model,  # type: DSCNet
         if epoch % show == 0 or epoch == epochs - 1:
             C = model.self_expression.Coefficient.detach().to('cpu').numpy()
             y_pred = spectral_clustering(C, K, dim_subspace, alpha, ro)
-            print('Epoch %02d: loss=%.4f, acc=%.4f, nmi=%.4f' %
-                  (epoch, loss.item() / y_pred.shape[0], acc(y, y_pred), nmi(y, y_pred)))
+            clusters = U.transpose() * y_pred
+            plt.imshow(np.reshape(clusters, (128, 128))), plt.show()
+            print('Epoch %02d: loss=%.4f' %
+                  (epoch, loss.item() / y_pred.shape[0]))
+            # print('Epoch %02d: loss=%.4f, acc=%.4f, nmi=%.4f' %
+            #       (epoch, loss.item() / y_pred.shape[0], acc(y, y_pred), nmi(y, y_pred)))
 
 
 if __name__ == "__main__":
@@ -201,10 +206,27 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     db = args.db
     if db == 'xuzhou':
-        data = sio.loadmat('data/Xuzhou/data.mat')['all_x']
-        data = np.transpose(np.reshape(data, [260, 500, 436]), axes=[1, 0, 2])
-        gt = sio.loadmat('data/Xuzhou/data.mat')['all_y']
-        gt = np.transpose(np.reshape(gt, [260, 500]))
+        x = sio.loadmat('data/Lab/WhiteTargets_F_512_processed.mat')['FIR']
+        U = sio.loadmat('data/Lab/WhiteTargets_F_512_processed.mat')['U']
+        x = np.reshape(x, (-1, 1, 16, 16))
+        y = x
+        # data = sio.loadmat('data/Xuzhou/data.mat')['all_x']
+        # data = np.transpose(np.reshape(data, [260, 500, 436]), axes=[1, 0, 2])
+        # gt = sio.loadmat('data/Xuzhou/data.mat')['all_y']
+        # gt = np.transpose(np.reshape(gt, [260, 500]))
+
+        # network and optimization parameters
+        num_sample = x.shape[0]
+        channels = [1, 20]
+        kernels = [2]
+        epochs = 500
+        weight_coef = 1.0
+        weight_selfExp = 50  # 75
+
+        # post clustering parameters
+        alpha = 0.02  # 0.04  # threshold of C
+        dim_subspace = 64  # 12  # dimension of each subspace
+        ro = 8  #
     if db == 'coil20':
         # load data
         data = sio.loadmat('data/COIL/COIL20.mat')
@@ -265,9 +287,9 @@ if __name__ == "__main__":
 
     # load the pretrained weights which are provided by the original author in
     # https://github.com/panji1990/Deep-subspace-clustering-networks
-    ae_state_dict = torch.load('pretrained_weights_original/%s.pkl' % db)
-    dscnet.ae.load_state_dict(ae_state_dict)
-    print("Pretrained ae weights are loaded successfully.")
+    # ae_state_dict = torch.load('pretrained_weights_original/%s.pkl' % db)
+    # dscnet.ae.load_state_dict(ae_state_dict)
+    # print("Pretrained ae weights are loaded successfully.")
 
     train(dscnet, x, y, epochs, weight_coef=weight_coef, weight_selfExp=weight_selfExp,
           alpha=alpha, dim_subspace=dim_subspace, ro=ro, show=args.show_freq, device=device)
