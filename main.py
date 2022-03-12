@@ -11,6 +11,10 @@ from post_clustering import spectral_clustering, acc, nmi
 import scipy.io as sio
 import math
 import matplotlib.pyplot as plt
+import wandb
+from PIL import Image
+from metrics_accuracy import clustering_accuracy
+from sklearn.metrics import normalized_mutual_info_score
 
 
 class Conv2dSamePad(nn.Module):
@@ -137,6 +141,7 @@ class DSCNet(nn.Module):
         self.n = num_sample
         self.ae = ConvAE(channels, kernels)
         self.self_expression = SelfExpression(self.n)
+        self.nConv = torch.nn.Conv2d(channels[-1], channels[-1], kernels[0], padding=1)
 
     def forward(self, x):  # shape=[n, c, w, h]
         z = self.ae.encoder(x)
@@ -146,9 +151,12 @@ class DSCNet(nn.Module):
         z = z.view(self.n, -1)  # shape=[n, d]
         z_recon = self.self_expression(z)  # shape=[n, d]
         z_recon_reshape = z_recon.view(shape)
-
+        z_recon_reshape = self.nConv(z_recon_reshape)
+        z_recon = z_recon_reshape.view(z_recon.shape)
         x_recon = self.ae.decoder(z_recon_reshape)  # shape=[n, c, w, h]
-        return x_recon, z, z_recon
+        # z_conv = self.nConv(z_recon_reshape)
+        # z_conv = z_conv.view(z_recon.shape)
+        return x_recon, z, z_recon # , z_conv
 
     def loss_fn(self, x, x_recon, z, z_recon, weight_coef, weight_selfExp):
         loss_ae = F.mse_loss(x_recon, x, reduction='sum')
@@ -160,18 +168,20 @@ class DSCNet(nn.Module):
 
 
 def train(model,  # type: DSCNet
-          x, y, epochs, lr=5e-4, weight_coef=1.0, weight_selfExp=150, device='cuda',
-          alpha=0.04, dim_subspace=12, ro=8, show=50):
+          x, y, epochs, lr=1e-3, weight_coef=1.0, weight_selfExp=150, device='cuda',
+          alpha=0.04, dim_subspace=12, ro=8, show=10):
     optimizer = optim.Adam(model.parameters(), lr=lr)
     if not isinstance(x, torch.Tensor):
         x = torch.tensor(x, dtype=torch.float32, device=device)
     x = x.to(device)
     if isinstance(y, torch.Tensor):
         y = y.to('cpu').numpy()
-    K = 4  # len(np.unique(y))
+    K = 16  # 4  # len(np.unique(y))
     for epoch in range(epochs):
         x_recon, z, z_recon = model(x)
         loss = model.loss_fn(x, x_recon, z, z_recon, weight_coef=weight_coef, weight_selfExp=weight_selfExp)
+        # conv_loss = F.mse_loss(z_recon, z_conv, reduction='mean')
+        # loss += conv_loss
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -179,11 +189,33 @@ def train(model,  # type: DSCNet
             C = model.self_expression.Coefficient.detach().to('cpu').numpy()
             y_pred = spectral_clustering(C, K, dim_subspace, alpha, ro)
             clusters = U.transpose() * y_pred
-            plt.imshow(np.reshape(clusters, (128, 128))), plt.show()
-            print('Epoch %02d: loss=%.4f' %
-                  (epoch, loss.item() / y_pred.shape[0]))
-            # print('Epoch %02d: loss=%.4f, acc=%.4f, nmi=%.4f' %
-            #       (epoch, loss.item() / y_pred.shape[0], acc(y, y_pred), nmi(y, y_pred)))
+            clusters = np.reshape(clusters, (128, 128))
+            clusters = clusters.transpose()
+            f_clus = plt.figure()
+            plt.imshow(clusters), plt.axis('off')
+            f_lbls = plt.figure()
+            plt.imshow(data_lbls), plt.axis('off')
+            acc_m = clustering_accuracy(data_lbls.flatten(), clusters.flatten())
+            nmi_m = normalized_mutual_info_score(data_lbls.flatten(), clusters.flatten(), average_method='geometric')
+            # n_clusters = np.zeros((128, 128, 3))
+            # n_clusters[..., 0][clusters == 0] = 1
+            # n_clusters[..., 1][clusters == 1] = 1
+            # n_clusters[..., 2][clusters == 2] = 1
+            # n_clusters[..., 0][clusters == 3] = 1
+            # n_clusters[..., 2][clusters == 3] = 1
+            # n_clusters *= 255.0
+            experiment.log({
+                'loss': loss.item() / y_pred.shape[0],
+                'partial_result': {
+                    'ref': wandb.Image(f_lbls),
+                    'pred_clustering': wandb.Image(f_clus),
+                },
+                'epoch': epoch
+            })
+            # print('Epoch %02d: loss=%.4f' %
+            #       (epoch, loss.item() / y_pred.shape[0]))
+            print('Epoch %02d: loss=%.4f, acc=%.4f, nmi=%.4f' %
+                  (epoch, loss.item() / y_pred.shape[0], acc_m, nmi_m))
 
 
 if __name__ == "__main__":
@@ -192,11 +224,20 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='DSCNet')
     parser.add_argument('--db', default='xuzhou',
-                        choices=['xuzhou', 'coil20', 'coil100', 'orl', 'reuters10k', 'stl'])
-    parser.add_argument('--show-freq', default=10, type=int)
+                        choices=['indian', 'coil20', 'coil100', 'orl', 'reuters10k', 'stl'])
+    parser.add_argument('--show-freq', default=50, type=int)
     parser.add_argument('--ae-weights', default=None)
     parser.add_argument('--save-dir', default='results')
+    parser.add_argument('--debug', action='store_true', default=False, help='run wandb offline')
+    parser.add_argument('--learning-rate', '-lr', metavar='LR', type=float, default=1e-4,
+                        help='Learning rate', dest='lr')
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5000, help='Number of epochs')
+    parser.add_argument('--ref-img-path', required=True)
     args = parser.parse_args()
+    ref_img = Image.open(args.ref_img_path)
+    ref_img = ref_img.resize([128, 128])
+    ref_img = np.array(ref_img)
+
     print(args)
     import os
 
@@ -205,10 +246,15 @@ if __name__ == "__main__":
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     db = args.db
+    # if db == 'salinas':
+    #     filename =
     if db == 'xuzhou':
-        x = sio.loadmat('data/Lab/WhiteTargets_F_512_processed.mat')['FIR']
-        U = sio.loadmat('data/Lab/WhiteTargets_F_512_processed.mat')['U']
-        x = np.reshape(x, (-1, 1, 16, 16))
+        filename = 'data/Indian/FIR_Indian_processed.mat'
+        x = sio.loadmat(filename)[
+            'FIR']  # data/Lab/WhiteTargets_F_512_processed_16Feb.mat
+        U = sio.loadmat(filename)['U']
+        data_lbls = sio.loadmat(filename)['data_lbls']
+        x = np.reshape(x, (-1, 1, 8, 8))  # (-1, 1, 16, 16)
         y = x
         # data = sio.loadmat('data/Xuzhou/data.mat')['all_x']
         # data = np.transpose(np.reshape(data, [260, 500, 436]), axes=[1, 0, 2])
@@ -217,15 +263,19 @@ if __name__ == "__main__":
 
         # network and optimization parameters
         num_sample = x.shape[0]
-        channels = [1, 20]
-        kernels = [2]
-        epochs = 500
-        weight_coef = 1.0
-        weight_selfExp = 50  # 75
+        # channels = [1, 15]
+        channels = [1, 3, 5, 5]
+        kernels = [3, 3, 3]
+        epochs = args.epochs
+        if args.ae_weights:
+            weight_coef = args.ae_weights
+        else:
+            weight_coef = 1.0
+        weight_selfExp = 75
 
         # post clustering parameters
-        alpha = 0.02  # 0.04  # threshold of C
-        dim_subspace = 64  # 12  # dimension of each subspace
+        alpha = 0.06  # 0.04  # threshold of C
+        dim_subspace = 16  # 12  # dimension of each subspace
         ro = 8  #
     if db == 'coil20':
         # load data
@@ -291,6 +341,10 @@ if __name__ == "__main__":
     # dscnet.ae.load_state_dict(ae_state_dict)
     # print("Pretrained ae weights are loaded successfully.")
 
-    train(dscnet, x, y, epochs, weight_coef=weight_coef, weight_selfExp=weight_selfExp,
+    experiment = wandb.init(project='SPC_Design', resume='allow', mode="offline" if args.debug else "online")
+    experiment.config.update(dict(show_freq=args.show_freq, ae_weights=args.ae_weights,
+                                  learning_rate=args.lr, epochs=args.epochs))
+
+    train(dscnet, x, y, epochs, lr=args.lr, weight_coef=weight_coef, weight_selfExp=weight_selfExp,
           alpha=alpha, dim_subspace=dim_subspace, ro=ro, show=args.show_freq, device=device)
     torch.save(dscnet.state_dict(), args.save_dir + '/%s-model.ckp' % args.db)
